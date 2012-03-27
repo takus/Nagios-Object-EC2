@@ -9,21 +9,6 @@ define hostgroup {
 }
 
 ############################
-## Host
-############################
-
-: for $hosts -> $host {
-define host {
-    use generic-host
-    host_name <: $host.name :> 
-    alias base 
-    address <: $host.address :> 
-    max_check_attempts 10
-    contact_groups admins
-}
-: }
-
-############################
 ## Service
 ############################
 

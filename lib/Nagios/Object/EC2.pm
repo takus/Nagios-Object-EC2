@@ -45,7 +45,7 @@ sub generate {
     );
 
     my $members;
-    my $hosts;
+    my $hosts = [];
 
     my @instances = $ec2->describe_instances();
     for my $i (@instances) {
@@ -55,6 +55,13 @@ sub generate {
         my $addr = $i->privateIpAddress;
 
         next unless ($i->tagSet->{Role});
+        
+        my $host = {
+            name => $dns,
+            address => $addr
+        };
+        unshift $hosts, $host;
+        
         my @roles = split /:/, $i->tagSet->{Role};
         foreach my $role (@roles) {
             unless ($members->{$role}) {
@@ -63,15 +70,28 @@ sub generate {
             else {
                 $members->{$role} .= ",$dns";
             }
-                
-            $hosts->{$role} = [] unless ($hosts->{$role});
-            my $host = {
-                name => $dns,
-                address => $addr
-            };
-            unshift $hosts->{$role}, $host;
         }
     }
+
+    for my $host ($hosts) {
+        my $template_file = "$template_dir/hosts.template";
+        unless (-f $template_file) {
+            warn "$template_file is not found. Please create $template_file";
+            next;
+        }
+
+        my $object_file = "$objects_dir/hosts.cfg";
+        my $fh = IO::File->new( "> $object_file" )
+            or die "Could not create filehandle: $!";
+        print "generates $object_file\n";
+
+        my $tx = Text::Xslate->new();
+        my %vars = (
+            hosts   => $hosts,
+        );
+        print $fh $tx->render($template_file, \%vars);
+    }
+
 
     for my $role (keys $members) {
         my $template_file = "$template_dir/$role.template";
@@ -88,7 +108,6 @@ sub generate {
         my $tx = Text::Xslate->new();
         my %vars = (
             members => $members->{$role},
-            hosts   => $hosts->{$role},
         );
         print $fh $tx->render($template_file, \%vars);
     }
@@ -145,14 +164,12 @@ Create a new configuration object.
 
 Generate new nagios object files from template.
 
-Example of template file: base.template
+Example of template file:
 
-    define hostgroup {
-        hostgroup_name base 
-        alias base 
-        members <: $members :>
-    }
-
+    ##############
+    # host.cfg
+    ############## 
+    
     : for $hosts -> $host {
     define host {
         use generic-host
@@ -163,6 +180,16 @@ Example of template file: base.template
         contact_groups admins
     }
     : }
+
+    ############
+    # base.cfg
+    ############
+
+    define hostgroup {
+        hostgroup_name base 
+        alias base 
+        members <: $members :>
+    }
 
     define service {
         use generic-service
