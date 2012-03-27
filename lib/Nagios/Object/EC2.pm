@@ -125,10 +125,13 @@ version 0.0.1 beta
 Generates nagios object files (*.cfg) in $objects_dir with template files (*.template) in $template_dir ;
 
 Before using this module, you should assign "Role" tag to your ec2 instances.
-Format of "Role" tag is like these (separated by ':' if you want to assign multiple roles):
+Format of "Role" tag is like these:
+
     k=Role, v=base
     k=Role, v=base:web
     k=Role, v=base:db
+
+Separated by ':' if you want to assign multiple roles.
 
 =head1 METHODS 
 
