@@ -4,132 +4,171 @@ use warnings;
 use strict;
 use Carp;
 
-use version; our $VERSION = qv('0.0.3');
+use version; our $VERSION = qv('0.0.1');
 
-# Other recommended modules (uncomment to use):
-#  use IO::Prompt;
-#  use Perl6::Export;
-#  use Perl6::Slurp;
-#  use Perl6::Say;
+use Exporter::Lite;
+our @EXPORT = qw/generate/;
 
+use IO::File;
+use VM::EC2;
+use Text::Xslate qw(mark_raw);
 
-# Module implementation here
+sub new {
+    my $class = shift;
 
+    my %args = @_;
 
-1; # Magic true value required at end of module
+    my $self = {
+        -access_key  => $args{access_key}, 
+        -secret_key  => $args{secret_key},
+        -endpoint    => $args{endpoint},
+        -print_error => 1
+    };
+    bless $self, $class;
+ 
+    return $self;
+}
+
+sub generate {
+    my $self = shift;
+
+    my ($template_dir, $objects_dir) = @_;
+    unless ( -d $template_dir && -d $objects_dir) {
+        warn "$template_dir or $objects_dir is not found";
+    }
+
+    my $ec2 = VM::EC2->new(
+        -access_key  => $self->{-access_key}, 
+        -secret_key  => $self->{-secret_key},
+        -endpoint    => $self->{-endpoint},
+        -print_error => 1
+    );
+
+    my $members;
+    my $hosts;
+
+    my @instances = $ec2->describe_instances();
+    for my $i (@instances) {
+        next unless ($i->current_status eq 'running');
+        
+        my $dns  = $i->dnsName;
+        my $addr = $i->privateIpAddress;
+
+        next unless ($i->tagSet->{Role});
+        my @roles = split /:/, $i->tagSet->{Role};
+        foreach my $role (@roles) {
+            unless ($members->{$role}) {
+                $members->{$role} = $dns;
+            }
+            else {
+                $members->{$role} .= ",$dns";
+            }
+                
+            $hosts->{$role} = [] unless ($hosts->{$role});
+            my $host = {
+                name => $dns,
+                address => $addr
+            };
+            unshift $hosts->{$role}, $host;
+        }
+    }
+
+    for my $role (keys $members) {
+        my $template_file = "$template_dir/$role.template";
+        unless (-f $template_file) {
+            warn "$template_file is not found. Please create $template_file";
+            next;
+        }
+
+        my $object_file = "$objects_dir/$role.cfg";
+        my $fh = IO::File->new( "> $object_file" )
+            or die "Could not create filehandle: $!";
+        print "generates $object_file\n";
+
+        my $tx = Text::Xslate->new();
+        my %vars = (
+            members => $members->{$role},
+            hosts   => $hosts->{$role},
+        );
+        print $fh $tx->render($template_file, \%vars);
+    }
+
+}
+
+1;
 __END__
 
 =head1 NAME
 
-Nagios::Object::EC2 - [One line description of module's purpose here]
+Nagios::Object::EC2 - nagios object file generator for Amazon EC2
 
 
 =head1 VERSION
 
-This document describes Nagios::Object::EC2 version 0.0.1
+version 0.0.1 beta
 
 
 =head1 SYNOPSIS
 
     use Nagios::Object::EC2;
-
-=for author to fill in:
-    Brief code example(s) here showing commonest usage(s).
-    This section will be as far as many users bother reading
-    so make it as educational and exeplary as possible.
-  
-  
+    
+    my $ec2_object = Nagios::Object::EC2->new(
+        access_key => $ENV{AMAZON_ACCESS_KEY_ID}, 
+        secret_key => $ENV{AMAZON_SECRET_ACCESS_KEY},
+        endpoint   => $ENV{EC2_URL}, 
+    );
+    
+    $ec2_object->generate($template_dir, $objects_dir);
+    
 =head1 DESCRIPTION
 
-=for author to fill in:
-    Write a full description of the module and its features here.
-    Use subsections (=head2, =head3) as appropriate.
+Generates nagios object files (*.cfg) in $objects_dir with template files (*.template) in $template_dir ;
 
+Before using this module, you should assign "Role" tag to your ec2 instances.
+Format of "Role" tag is like these (separated by ':' if you want to assign multiple roles):
+    k=Role, v=base
+    k=Role, v=base:web
+    k=Role, v=base:db
 
-=head1 INTERFACE 
+=head1 METHODS 
 
-=for author to fill in:
-    Write a separate section listing the public components of the modules
-    interface. These normally consist of either subroutines that may be
-    exported, or methods that may be called on objects belonging to the
-    classes provided by the module.
+=over 4
 
+=item new($args)
 
-=head1 DIAGNOSTICS
+Create a new configuration object.
 
-=for author to fill in:
-    List every single error and warning message that the module can
-    generate (even the ones that will "never happen"), with a full
-    explanation of each problem, one or more likely causes, and any
-    suggested remedies.
+=item generate($template_dir, $objects_dir)
 
-=over
+Generate new nagios object files from template.
 
-=item C<< Error message here, perhaps with %s placeholders >>
+Example of template file: base.template
 
-[Description of error here]
+    define hostgroup {
+        hostgroup_name base 
+        alias base 
+        members <: $members :>
+    }
 
-=item C<< Another error message here >>
+    : for $hosts -> $host {
+    define host {
+        use generic-host
+        host_name <: $host.name :> 
+        alias base 
+        address <: $host.address :> 
+        max_check_attempts 10
+        contact_groups admins
+    }
+    : }
 
-[Description of error here]
-
-[Et cetera, et cetera]
+    define service {
+        use generic-service
+        hostgroup_name base 
+        service_description SSH
+        check_command check_ssh!22
+    }
 
 =back
-
-
-=head1 CONFIGURATION AND ENVIRONMENT
-
-=for author to fill in:
-    A full explanation of any configuration system(s) used by the
-    module, including the names and locations of any configuration
-    files, and the meaning of any environment variables or properties
-    that can be set. These descriptions must also include details of any
-    configuration language used.
-  
-Nagios::Object::EC2 requires no configuration files or environment variables.
-
-
-=head1 DEPENDENCIES
-
-=for author to fill in:
-    A list of all the other modules that this module relies upon,
-    including any restrictions on versions, and an indication whether
-    the module is part of the standard Perl distribution, part of the
-    module's distribution, or must be installed separately. ]
-
-None.
-
-
-=head1 INCOMPATIBILITIES
-
-=for author to fill in:
-    A list of any modules that this module cannot be used in conjunction
-    with. This may be due to name conflicts in the interface, or
-    competition for system or program resources, or due to internal
-    limitations of Perl (for example, many modules that use source code
-    filters are mutually incompatible).
-
-None reported.
-
-
-=head1 BUGS AND LIMITATIONS
-
-=for author to fill in:
-    A list of known problems with the module, together with some
-    indication Whether they are likely to be fixed in an upcoming
-    release. Also a list of restrictions on the features the module
-    does provide: data types that cannot be handled, performance issues
-    and the circumstances in which they may arise, practical
-    limitations on the size of data sets, special cases that are not
-    (yet) handled, etc.
-
-No bugs have been reported.
-
-Please report any bugs or feature requests to
-C<bug-nagios-object-ec2@rt.cpan.org>, or through the web interface at
-L<http://rt.cpan.org>.
-
 
 =head1 AUTHOR
 
